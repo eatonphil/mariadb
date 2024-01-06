@@ -141,8 +141,11 @@ int ha_blackhole::delete_row(const uchar *buf)
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
+static uint rows_scanned = 0;
 int ha_blackhole::rnd_init(bool scan)
 {
+  // Reset rows_scanned. Not thread safe.
+  rows_scanned = 0;
   DBUG_ENTER("ha_blackhole::rnd_init");
   DBUG_RETURN(0);
 }
@@ -150,14 +153,25 @@ int ha_blackhole::rnd_init(bool scan)
 
 int ha_blackhole::rnd_next(uchar *buf)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::rnd_next");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    rc= 0;
-  else
-    rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  uchar* ptr = buf;
+  *ptr = 0;
+  ptr++;
+  int i = 201;
+  memcpy(ptr, &i, sizeof(i));
+  assert(sizeof(i) == 4);
+  ptr += sizeof(i);
+
+  int j = 432;
+  memcpy(ptr, &j, sizeof(j));
+  assert(sizeof(j) == 4);
+  ptr += sizeof(j);
+
+  if (rows_scanned == 1) {
+    return HA_ERR_END_OF_FILE;
+  }
+
+  rows_scanned++;
+  return 0;
 }
 
 
