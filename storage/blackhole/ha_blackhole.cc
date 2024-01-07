@@ -117,10 +117,26 @@ const char *ha_blackhole::index_type(uint key_number)
                HA_KEY_ALG_RTREE) ? "RTREE" : "BTREE");
 }
 
+static int rows[2][1000] = {};
+static uint row_writer_index = 0;
 int ha_blackhole::write_row(const uchar * buf)
 {
-  DBUG_ENTER("ha_blackhole::write_row");
-  DBUG_RETURN(table->next_number_field ? update_auto_increment() : 0);
+  // Skip past NULL bitmap.
+  buf++;
+  int first_column;
+  assert(sizeof(first_column) == 4);
+  memcpy(&first_column, buf, sizeof(first_column));
+  buf += sizeof(first_column);
+  rows[row_writer_index][0] = first_column;
+
+  int second_column;
+  assert(sizeof(second_column) == 4);
+  memcpy(&second_column, buf, sizeof(second_column));
+  buf += sizeof(second_column);
+  rows[row_writer_index][1] = second_column;
+
+  row_writer_index++;
+  return 0;
 }
 
 int ha_blackhole::update_row(const uchar *old_data, const uchar *new_data)
@@ -141,11 +157,11 @@ int ha_blackhole::delete_row(const uchar *buf)
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
-static uint rows_scanned = 0;
+static uint row_reader_index = 0;
 int ha_blackhole::rnd_init(bool scan)
 {
   // Reset rows_scanned. Not thread safe.
-  rows_scanned = 0;
+  row_reader_index = 0;
   DBUG_ENTER("ha_blackhole::rnd_init");
   DBUG_RETURN(0);
 }
@@ -153,24 +169,24 @@ int ha_blackhole::rnd_init(bool scan)
 
 int ha_blackhole::rnd_next(uchar *buf)
 {
-  uchar* ptr = buf;
-  *ptr = 0;
-  ptr++;
-  int i = 201;
-  memcpy(ptr, &i, sizeof(i));
-  assert(sizeof(i) == 4);
-  ptr += sizeof(i);
-
-  int j = 432;
-  memcpy(ptr, &j, sizeof(j));
-  assert(sizeof(j) == 4);
-  ptr += sizeof(j);
-
-  if (rows_scanned == 1) {
+  if (row_reader_index == row_writer_index) {
     return HA_ERR_END_OF_FILE;
   }
 
-  rows_scanned++;
+  uchar* ptr = buf;
+  *ptr = 0;
+  ptr++;
+  int first_column = rows[row_reader_index][0];
+  memcpy(ptr, &first_column, sizeof(first_column));
+  assert(sizeof(first_column) == 4);
+  ptr += sizeof(first_column);
+
+  int second_column = rows[row_reader_index][1];
+  memcpy(ptr, &second_column, sizeof(second_column));
+  assert(sizeof(second_column) == 4);
+  ptr += sizeof(second_column);
+
+  row_reader_index++;
   return 0;
 }
 
