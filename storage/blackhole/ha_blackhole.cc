@@ -272,7 +272,6 @@ error:
 static void free_share(st_blackhole_share *share)
 {
   mysql_mutex_lock(&blackhole_mutex);
-  delete database;
   mysql_mutex_unlock(&blackhole_mutex);
 }
 
@@ -334,6 +333,7 @@ static int blackhole_fini(void *p)
 {
   my_hash_free(&blackhole_open_tables);
   mysql_mutex_destroy(&blackhole_mutex);
+  delete database;
   return 0;
 }
 
