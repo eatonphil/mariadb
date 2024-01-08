@@ -25,32 +25,37 @@
 
 typedef std::vector<uchar> MememRow;
 
-struct MememTable
+class MememTable final
 {
+public:
   std::vector<MememRow *> rows;
   char *name;
+
+  ~MememTable()
+  {
+    for (auto &row : rows)
+    {
+      delete row;
+    }
+    free(name);
+  }
 };
 
-struct MememDatabase
+class MememDatabase
 {
+public:
   std::vector<MememTable *> tables;
-};
-
-/*
-  Shared structure for correct LOCK operation
-*/
-struct st_blackhole_share
-{
-  THR_LOCK lock;
-  uint use_count;
-  uint table_name_length;
-  char table_name[1];
+  ~MememDatabase()
+  {
+    for (auto &table : tables)
+    {
+      delete table;
+    }
+  }
 };
 
 class ha_blackhole final : public handler
 {
-  THR_LOCK_DATA lock; /* MySQL lock */
-  st_blackhole_share *share;
   uint current_position= 0;
   MememTable *memem_table= 0;
 
@@ -73,8 +78,8 @@ public:
   {
     return BLACKHOLE_MAX_KEY_LENGTH;
   }
-  int open(const char *name, int mode, uint test_if_locked);
-  int close(void);
+  int open(const char *name, int mode, uint test_if_locked) { return 0; }
+  int close(void) { return 0; }
   int truncate() { return 0; }
   int rnd_init(bool scan);
   int rnd_next(uchar *buf);
@@ -104,7 +109,10 @@ public:
   int external_lock(THD *thd, int lock_type) { return 0; }
   int create(const char *name, TABLE *table_arg, HA_CREATE_INFO *create_info);
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
-                             enum thr_lock_type lock_type);
+                             enum thr_lock_type lock_type)
+  {
+    return to;
+  }
   int delete_table(const char *name);
 
 private:
