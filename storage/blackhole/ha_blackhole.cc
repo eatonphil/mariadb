@@ -25,24 +25,6 @@
 #include "ha_blackhole.h"
 #include "sql_class.h"                          // THD, SYSTEM_THREAD_SLAVE_SQL
 
-/**
-  Checks if the param 'thd' is pointing to slave applier thread and row based
-  replication is in use.
-
-  A row event will have its thd->query() == NULL except in cases where
-  replicate_annotate_row_events is enabled. In the later case the thd->query()
-  will be pointing to the query, received through replicated annotate event
-  from master.
-
-  @param thd   pointer to a THD instance
-
-  @return TRUE if thread is slave applier and row based replication is in use
-*/
-static bool is_row_based_replication(THD *thd)
-{
-  return thd->system_thread == SYSTEM_THREAD_SLAVE_SQL &&
-    (thd->query() == NULL || thd->variables.binlog_annotate_row_events);
-}
 /* Static declarations for handlerton */
 
 static handler *blackhole_create_handler(handlerton *hton,
@@ -71,50 +53,37 @@ ha_blackhole::ha_blackhole(handlerton *hton,
 {}
 
 
-int ha_blackhole::open(const char *name, int mode, uint test_if_locked)
-{
-  DBUG_ENTER("ha_blackhole::open");
-
-  if (!(share= get_share(name)))
-    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+int ha_blackhole::open(const char *name, int mode, uint test_if_locked) {
+  if (!(share= get_share(name))) {
+    return HA_ERR_OUT_OF_MEM;
+  }
 
   thr_lock_data_init(&share->lock, &lock, NULL);
-  DBUG_RETURN(0);
+  return 0;
 }
 
-int ha_blackhole::close(void)
-{
-  DBUG_ENTER("ha_blackhole::close");
+int ha_blackhole::close(void) {
   free_share(share);
-  DBUG_RETURN(0);
+  return 0;
 }
 
 int ha_blackhole::create(const char *name, TABLE *table_arg,
-                         HA_CREATE_INFO *create_info)
-{
-  DBUG_ENTER("ha_blackhole::create");
-  DBUG_RETURN(0);
+                         HA_CREATE_INFO *create_info) {
+  return 0;
 }
 
-/*
-  Intended to support partitioning.
-  Allows a particular partition to be truncated.
-*/
-int ha_blackhole::truncate()
-{
-  DBUG_ENTER("ha_blackhole::truncate");
-  DBUG_RETURN(0);
+int ha_blackhole::truncate() {
+  return 0;
 }
 
 const char *ha_blackhole::index_type(uint key_number)
 {
-  DBUG_ENTER("ha_blackhole::index_type");
-  DBUG_RETURN((table_share->key_info[key_number].flags & HA_FULLTEXT) ? 
-              "FULLTEXT" :
-              (table_share->key_info[key_number].flags & HA_SPATIAL) ?
-              "SPATIAL" :
-              (table_share->key_info[key_number].algorithm ==
-               HA_KEY_ALG_RTREE) ? "RTREE" : "BTREE");
+  return (table_share->key_info[key_number].flags & HA_FULLTEXT) ? 
+    "FULLTEXT" :
+    (table_share->key_info[key_number].flags & HA_SPATIAL) ?
+    "SPATIAL" :
+    (table_share->key_info[key_number].algorithm ==
+     HA_KEY_ALG_RTREE) ? "RTREE" : "BTREE";
 }
 
 static int rows[2][1000] = {};
@@ -141,20 +110,11 @@ int ha_blackhole::write_row(const uchar * buf)
 
 int ha_blackhole::update_row(const uchar *old_data, const uchar *new_data)
 {
-  DBUG_ENTER("ha_blackhole::update_row");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    DBUG_RETURN(0);
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  return 0; // Or HA_ERR_WRONG_COMMAND
 }
 
-int ha_blackhole::delete_row(const uchar *buf)
-{
-  DBUG_ENTER("ha_blackhole::delete_row");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    DBUG_RETURN(0);
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+int ha_blackhole::delete_row(const uchar *buf) {
+  return 0; // Or HA_ERR_WRONG_COMMAND
 }
 
 static uint row_reader_index = 0;
@@ -162,10 +122,8 @@ int ha_blackhole::rnd_init(bool scan)
 {
   // Reset rows_scanned. Not thread safe.
   row_reader_index = 0;
-  DBUG_ENTER("ha_blackhole::rnd_init");
-  DBUG_RETURN(0);
+  return 0;
 }
-
 
 int ha_blackhole::rnd_next(uchar *buf)
 {
@@ -190,25 +148,13 @@ int ha_blackhole::rnd_next(uchar *buf)
   return 0;
 }
 
-
-int ha_blackhole::rnd_pos(uchar * buf, uchar *pos)
-{
-  DBUG_ENTER("ha_blackhole::rnd_pos");
-  DBUG_ASSERT(0);
-  DBUG_RETURN(0);
+int ha_blackhole::rnd_pos(uchar * buf, uchar *pos) {
+  return 0;
 }
 
+void ha_blackhole::position(const uchar *record) {}
 
-void ha_blackhole::position(const uchar *record)
-{
-  DBUG_ENTER("ha_blackhole::position");
-  DBUG_ASSERT(0);
-  DBUG_VOID_RETURN;
-}
-
-
-int ha_blackhole::info(uint flag)
-{
+int ha_blackhole::info(uint flag) {
   DBUG_ENTER("ha_blackhole::info");
 
   bzero((char*) &stats, sizeof(stats));
@@ -228,10 +174,8 @@ int ha_blackhole::info(uint flag)
   DBUG_RETURN(0);
 }
 
-int ha_blackhole::external_lock(THD *thd, int lock_type)
-{
-  DBUG_ENTER("ha_blackhole::external_lock");
-  DBUG_RETURN(0);
+int ha_blackhole::external_lock(THD *thd, int lock_type) {
+  return 0;
 }
 
 
@@ -271,84 +215,45 @@ THR_LOCK_DATA **ha_blackhole::store_lock(THD *thd,
   DBUG_RETURN(to);
 }
 
-
 int ha_blackhole::index_read_map(uchar * buf, const uchar * key,
                                  key_part_map keypart_map,
-                             enum ha_rkey_function find_flag)
-{
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_read");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    rc= 0;
-  else
-    rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+                             enum ha_rkey_function find_flag) {
+  return HA_ERR_END_OF_FILE;
 }
-
 
 int ha_blackhole::index_read_idx_map(uchar * buf, uint idx, const uchar * key,
                                  key_part_map keypart_map,
                                  enum ha_rkey_function find_flag)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_read_idx");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    rc= 0;
-  else
-    rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
-
 
 int ha_blackhole::index_read_last_map(uchar * buf, const uchar * key,
                                       key_part_map keypart_map)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_read_last");
-  THD *thd= ha_thd();
-  if (is_row_based_replication(thd))
-    rc= 0;
-  else
-    rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
-
 
 int ha_blackhole::index_next(uchar * buf)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_next");
-  rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
-
 
 int ha_blackhole::index_prev(uchar * buf)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_prev");
-  rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
 
 
 int ha_blackhole::index_first(uchar * buf)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_first");
-  rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
 
 
 int ha_blackhole::index_last(uchar * buf)
 {
-  int rc;
-  DBUG_ENTER("ha_blackhole::index_last");
-  rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  return HA_ERR_END_OF_FILE;
 }
 
 
@@ -408,7 +313,6 @@ static uchar* blackhole_get_key(st_blackhole_share *share, size_t *length,
   return (uchar*) share->table_name;
 }
 
-#ifdef HAVE_PSI_INTERFACE
 static PSI_mutex_key bh_key_mutex_blackhole;
 
 static PSI_mutex_info all_blackhole_mutexes[]=
@@ -427,15 +331,12 @@ void init_blackhole_psi_keys()
   count= array_elements(all_blackhole_mutexes);
   PSI_server->register_mutex(category, all_blackhole_mutexes, count);
 }
-#endif
 
 static int blackhole_init(void *p)
 {
   handlerton *blackhole_hton;
 
-#ifdef HAVE_PSI_INTERFACE
   init_blackhole_psi_keys();
-#endif
 
   blackhole_hton= (handlerton *)p;
   blackhole_hton->db_type= DB_TYPE_BLACKHOLE_DB;
