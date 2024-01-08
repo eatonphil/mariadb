@@ -42,6 +42,22 @@ static void free_share(st_blackhole_share *share);
 
 static MememDatabase *database;
 
+// TODO: this is not thread safe.
+static int memem_table_index(const char *name)
+{
+  int i;
+  assert(database->tables.size() < INT_MAX);
+  for (i= 0; i < (int) database->tables.size(); i++)
+  {
+    if (strcmp(database->tables[i]->name, name) == 0)
+    {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
 /*****************************************************************************
 ** BLACKHOLE tables
 *****************************************************************************/
@@ -63,34 +79,23 @@ int ha_blackhole::close(void)
   return 0;
 }
 
-// TODO: this is not thread safe.
-static int memem_table_index(const char *name)
-{
-  int i;
-  assert(database->tables.size() < INT_MAX);
-  for (i= 0; i < (int) database->tables.size(); i++)
-  {
-    if (strcmp(database->tables[i]->name, name) == 0)
-    {
-      return i;
-    }
-  }
-
-  return -1;
-}
-
 int ha_blackhole::create(const char *name, TABLE *table_arg,
                          HA_CREATE_INFO *create_info)
 {
-  // I assume this gets taken care of at a higher level anyway. Since
-  // someone else is probably tracking table metadata.
-  assert(memem_table_index(name) == -1);
+  if (memem_table_index(name) != -1)
+  {
+    // For some reason even with `DROP TABLE IF EXISTS x`,
+    // delete_table() is not called. So we get into this position
+    // where sometimes the storage engine tries to create a table that
+    // already exists.
+    delete_table(name);
+  }
 
   // TODO: this is not thread safe.
   MememTable *t= new MememTable;
   t->name= strdup(name);
   database->tables.push_back(t);
-  DBUG_PRINT("info", ("CREATED TABLE! %s", name));
+  DBUG_PRINT("info", ("[MEMEM] Created table '%s'.", name));
 
   return 0;
 }
@@ -100,6 +105,7 @@ int ha_blackhole::delete_table(const char *name)
   int index= memem_table_index(name);
   if (index == -1)
   {
+    DBUG_PRINT("info", ("[MEMEM] Table '%s' already deleted.", name));
     // Already deleted.
     return 0;
   }
@@ -114,6 +120,7 @@ int ha_blackhole::delete_table(const char *name)
   delete t;
 
   database->tables.erase(database->tables.begin() + index);
+  DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
 
   return 0;
 };
@@ -125,7 +132,7 @@ void ha_blackhole::reset_memem_table()
 
   std::string full_name= "./" + std::string(table->s->db.str) + "/" +
                          std::string(table->s->table_name.str);
-
+  DBUG_PRINT("info", ("[MEMEM] Resetting to '%s'.", full_name.c_str()));
   int index= memem_table_index(full_name.c_str());
   assert(index >= 0);
   assert(index < (int) database->tables.size());
@@ -154,8 +161,8 @@ int ha_blackhole::write_row(const uchar *buf)
       return 1;
     }
 
-    buf+= sizeof(int);
     row->insert(std::end(*row), buf, buf + sizeof(int));
+    buf+= sizeof(int);
     i++;
   }
 
@@ -265,8 +272,7 @@ error:
 static void free_share(st_blackhole_share *share)
 {
   mysql_mutex_lock(&blackhole_mutex);
-  if (!--share->use_count)
-    my_hash_delete(&blackhole_open_tables, (uchar *) share);
+  delete database;
   mysql_mutex_unlock(&blackhole_mutex);
 }
 
@@ -328,9 +334,6 @@ static int blackhole_fini(void *p)
 {
   my_hash_free(&blackhole_open_tables);
   mysql_mutex_destroy(&blackhole_mutex);
-
-  delete database;
-
   return 0;
 }
 
