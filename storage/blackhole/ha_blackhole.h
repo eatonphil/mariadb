@@ -14,92 +14,105 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #ifdef USE_PRAGMA_INTERFACE
-#pragma interface			/* gcc class implementation */
+#pragma interface /* gcc class implementation */
 #endif
 
-#include "thr_lock.h"                           /* THR_LOCK */
-#include "handler.h"                            /* handler */
-#include "table.h"                              /* TABLE_SHARE */
-#include "sql_const.h"                          /* MAX_KEY */
+#include "thr_lock.h"
+#include "handler.h"
+#include "table.h"
+#include "sql_const.h"
+#include <vector>
+
+typedef std::vector<uchar> MememRow;
+
+struct MememTable
+{
+  std::vector<MememRow *> rows;
+  char *name;
+};
+
+struct MememDatabase
+{
+  std::vector<MememTable *> tables;
+};
 
 /*
   Shared structure for correct LOCK operation
 */
-struct st_blackhole_share {
+struct st_blackhole_share
+{
   THR_LOCK lock;
   uint use_count;
   uint table_name_length;
   char table_name[1];
 };
 
-
-/*
-  Class definition for the blackhole storage engine
-  "Dumbest named feature ever"
-*/
 class ha_blackhole final : public handler
 {
-  THR_LOCK_DATA lock;      /* MySQL lock */
+  THR_LOCK_DATA lock; /* MySQL lock */
   st_blackhole_share *share;
+  uint current_position= 0;
+  MememTable *memem_table= 0;
 
 public:
-  ha_blackhole(handlerton *hton, TABLE_SHARE *table_arg);
-  ~ha_blackhole() = default;
-  /*
-    The name of the index type that will be used for display
-    don't implement this method unless you really have indexes
-  */
-  const char *index_type(uint key_number);
-  ulonglong table_flags() const
+  ha_blackhole(handlerton *hton, TABLE_SHARE *table_arg)
+      : handler(hton, table_arg)
   {
-    return(HA_NULL_IN_KEY | HA_CAN_FULLTEXT | HA_CAN_SQL_HANDLER |
-           HA_BINLOG_STMT_CAPABLE | HA_BINLOG_ROW_CAPABLE |
-           HA_CAN_INDEX_BLOBS | HA_AUTO_PART_KEY | HA_CAN_ONLINE_BACKUPS |
-           HA_FILE_BASED | HA_CAN_GEOMETRY | HA_CAN_INSERT_DELAYED);
   }
-  ulong index_flags(uint inx, uint part, bool all_parts) const
-  {
-    return ((table_share->key_info[inx].algorithm == HA_KEY_ALG_FULLTEXT) ?
-            0 : HA_READ_NEXT | HA_READ_PREV | HA_READ_RANGE |
-            HA_READ_ORDER | HA_KEYREAD_ONLY);
-  }
+  ~ha_blackhole()= default;
+  const char *index_type(uint key_number) { return ""; }
+  ulonglong table_flags() const { return 0; }
+  ulong index_flags(uint inx, uint part, bool all_parts) const { return 0; }
   /* The following defines can be increased if necessary */
-#define BLACKHOLE_MAX_KEY	MAX_KEY		/* Max allowed keys */
-#define BLACKHOLE_MAX_KEY_SEG	16		/* Max segments for key */
-#define BLACKHOLE_MAX_KEY_LENGTH	3500		/* Like in InnoDB */
-  uint max_supported_keys()          const { return BLACKHOLE_MAX_KEY; }
-  uint max_supported_key_length()    const { return BLACKHOLE_MAX_KEY_LENGTH; }
-  uint max_supported_key_part_length() const { return BLACKHOLE_MAX_KEY_LENGTH; }
+#define BLACKHOLE_MAX_KEY MAX_KEY     /* Max allowed keys */
+#define BLACKHOLE_MAX_KEY_SEG 16      /* Max segments for key */
+#define BLACKHOLE_MAX_KEY_LENGTH 3500 /* Like in InnoDB */
+  uint max_supported_keys() const { return BLACKHOLE_MAX_KEY; }
+  uint max_supported_key_length() const { return BLACKHOLE_MAX_KEY_LENGTH; }
+  uint max_supported_key_part_length() const
+  {
+    return BLACKHOLE_MAX_KEY_LENGTH;
+  }
   int open(const char *name, int mode, uint test_if_locked);
   int close(void);
-  int truncate();
+  int truncate() { return 0; }
   int rnd_init(bool scan);
   int rnd_next(uchar *buf);
-  int rnd_pos(uchar * buf, uchar *pos);
-  int index_read_map(uchar * buf, const uchar * key, key_part_map keypart_map,
-                     enum ha_rkey_function find_flag);
-  int index_read_idx_map(uchar * buf, uint idx, const uchar * key,
-                         key_part_map keypart_map,
-                         enum ha_rkey_function find_flag);
-  int index_read_last_map(uchar * buf, const uchar * key, key_part_map keypart_map);
-  int index_next(uchar * buf);
-  int index_prev(uchar * buf);
-  int index_first(uchar * buf);
-  int index_last(uchar * buf);
-  void position(const uchar *record);
-  int info(uint flag);
-  int external_lock(THD *thd, int lock_type);
-  int create(const char *name, TABLE *table_arg,
-             HA_CREATE_INFO *create_info);
-  THR_LOCK_DATA **store_lock(THD *thd,
-                             THR_LOCK_DATA **to,
-                             enum thr_lock_type lock_type);
-  int delete_table(const char *name)
+  int rnd_pos(uchar *buf, uchar *pos) { return 0; }
+  int index_read_map(uchar *buf, const uchar *key, key_part_map keypart_map,
+                     enum ha_rkey_function find_flag)
   {
-    return 0;
+    return HA_ERR_END_OF_FILE;
   }
+  int index_read_idx_map(uchar *buf, uint idx, const uchar *key,
+                         key_part_map keypart_map,
+                         enum ha_rkey_function find_flag)
+  {
+    return HA_ERR_END_OF_FILE;
+  }
+  int index_read_last_map(uchar *buf, const uchar *key,
+                          key_part_map keypart_map)
+  {
+    return HA_ERR_END_OF_FILE;
+  }
+  int index_next(uchar *buf) { return HA_ERR_END_OF_FILE; }
+  int index_prev(uchar *buf) { return HA_ERR_END_OF_FILE; }
+  int index_first(uchar *buf) { return HA_ERR_END_OF_FILE; }
+  int index_last(uchar *buf) { return HA_ERR_END_OF_FILE; }
+  void position(const uchar *record) { return; }
+  int info(uint flag) { return 0; }
+  int external_lock(THD *thd, int lock_type) { return 0; }
+  int create(const char *name, TABLE *table_arg, HA_CREATE_INFO *create_info);
+  THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
+                             enum thr_lock_type lock_type);
+  int delete_table(const char *name);
+
 private:
+  void reset_memem_table();
   virtual int write_row(const uchar *buf);
-  virtual int update_row(const uchar *old_data, const uchar *new_data);
-  virtual int delete_row(const uchar *buf);
+  int update_row(const uchar *old_data, const uchar *new_data)
+  {
+    return HA_ERR_WRONG_COMMAND;
+  };
+  int delete_row(const uchar *buf) { return HA_ERR_WRONG_COMMAND; }
 };
