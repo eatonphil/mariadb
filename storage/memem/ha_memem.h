@@ -21,43 +21,27 @@
 #include "handler.h"
 #include "table.h"
 #include "sql_const.h"
+
 #include <vector>
+#include <memory>
 
 typedef std::vector<uchar> MememRow;
 
-class MememTable final
+struct MememTable
 {
-public:
-  std::vector<MememRow *> rows;
-  char *name;
-
-  ~MememTable()
-  {
-    for (auto &row : rows)
-    {
-      delete row;
-    }
-    free(name);
-  }
+  std::vector<std::shared_ptr<MememRow>> rows;
+  std::shared_ptr<std::string> name;
 };
 
-class MememDatabase
+struct MememDatabase
 {
-public:
-  std::vector<MememTable *> tables;
-  ~MememDatabase()
-  {
-    for (auto &table : tables)
-    {
-      delete table;
-    }
-  }
+  std::vector<std::shared_ptr<MememTable>> tables;
 };
 
 class ha_memem final : public handler
 {
   uint current_position= 0;
-  MememTable *memem_table= 0;
+  std::shared_ptr<MememTable> memem_table= 0;
 
 public:
   ha_memem(handlerton *hton, TABLE_SHARE *table_arg) : handler(hton, table_arg)

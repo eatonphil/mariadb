@@ -41,7 +41,7 @@ static int memem_table_index(const char *name)
   assert(database->tables.size() < INT_MAX);
   for (i= 0; i < (int) database->tables.size(); i++)
   {
-    if (strcmp(database->tables[i]->name, name) == 0)
+    if (strcmp(database->tables[i]->name->c_str(), name) == 0)
     {
       return i;
     }
@@ -59,9 +59,9 @@ int ha_memem::create(const char *name, TABLE *table_arg,
 {
   assert(memem_table_index(name) == -1);
 
+  auto t = std::make_shared<MememTable>();
+  t->name= std::make_shared<std::string>(name);
   // TODO: this is not thread safe.
-  MememTable *t= new MememTable;
-  t->name= strdup(name);
   database->tables.push_back(t);
   DBUG_PRINT("info", ("[MEMEM] Created table '%s'.", name));
 
@@ -76,6 +76,7 @@ void ha_memem::reset_memem_table()
   std::string full_name= "./" + std::string(table->s->db.str) + "/" +
                          std::string(table->s->table_name.str);
   DBUG_PRINT("info", ("[MEMEM] Resetting to '%s'.", full_name.c_str()));
+  assert(database->tables.size() > 0);
   int index= memem_table_index(full_name.c_str());
   assert(index >= 0);
   assert(index < (int) database->tables.size());
@@ -94,7 +95,7 @@ int ha_memem::write_row(const uchar *buf)
   // Assume there are no NULLs.
   buf++;
 
-  std::vector<uchar> *row= new std::vector<uchar>;
+  auto row= std::make_shared<std::vector<uchar>>();
   uint i= 0;
   while (table->field[i])
   {
@@ -136,7 +137,7 @@ int ha_memem::rnd_next(uchar *buf)
 
   // Rows internally are stored in the same format that MariaDB
   // wants. So we can just copy them over.
-  std::vector<uchar> *row= memem_table->rows[current_position];
+  std::shared_ptr<std::vector<uchar>> row= memem_table->rows[current_position];
   std::copy(row->begin(), row->end(), ptr);
 
   current_position++;
@@ -158,11 +159,7 @@ static int memem_init(void *p)
     }
 
     // TODO: this is not thread safe.
-    MememTable *t= database->tables[index];
-
     database->tables.erase(database->tables.begin() + index);
-
-    delete t;
     DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
 
     return 0;
