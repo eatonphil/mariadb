@@ -21,20 +21,16 @@
 #include <my_global.h>
 #include "sql_priv.h"
 #include "unireg.h"
+#include "sql_class.h"
+
 #include "ha_memem.h"
-#include "sql_class.h" // THD, SYSTEM_THREAD_SLAVE_SQL
 
-/* Static declarations for handlerton */
-
-static handler *memem_create_handler(handlerton *hton, TABLE_SHARE *table,
-                                     MEM_ROOT *mem_root)
-{
-  return new (mem_root) ha_memem(hton, table);
-}
-
+// WARNING! All accesses of `database` in this code are thread
+// unsafe. Since this was written during a hack week, I didn't have
+// time to figure out MySQL/MariaDB's runtime well enough to do the
+// thread-safe version of this.
 static MememDatabase *database;
 
-// TODO: this is not thread safe.
 static int memem_table_index(const char *name)
 {
   int i;
@@ -50,18 +46,70 @@ static int memem_table_index(const char *name)
   return -1;
 }
 
-/*****************************************************************************
-** MEMEM tables
-*****************************************************************************/
+static handler *memem_create_handler(handlerton *hton, TABLE_SHARE *table,
+                                     MEM_ROOT *mem_root)
+{
+  return new (mem_root) ha_memem(hton, table);
+}
+
+static int memem_init(void *p)
+{
+  handlerton *memem_hton;
+
+  memem_hton= (handlerton *) p;
+  memem_hton->db_type= DB_TYPE_AUTOASSIGN;
+  memem_hton->create= memem_create_handler;
+  memem_hton->drop_table= [](handlerton *, const char *name) {
+    int index= memem_table_index(name);
+    if (index == -1)
+    {
+      return HA_ERR_NO_SUCH_TABLE;
+    }
+
+    database->tables.erase(database->tables.begin() + index);
+    DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
+
+    return 0;
+  };
+  memem_hton->flags= HTON_CAN_RECREATE;
+
+  database= new MememDatabase;
+
+  return 0;
+}
+
+static int memem_fini(void *p)
+{
+  delete database;
+  return 0;
+}
+
+struct st_mysql_storage_engine memem_storage_engine= {
+    MYSQL_HANDLERTON_INTERFACE_VERSION};
+
+maria_declare_plugin(memem){
+    MYSQL_STORAGE_ENGINE_PLUGIN,
+    &memem_storage_engine,
+    "MEMEM",
+    "MySQL AB",
+    "/dev/null storage engine (anything you write to it disappears)",
+    PLUGIN_LICENSE_GPL,
+    memem_init, /* Plugin Init */
+    memem_fini, /* Plugin Deinit */
+    0x0100 /* 1.0 */,
+    NULL,                          /* status variables                */
+    NULL,                          /* system variables                */
+    "1.0",                         /* string version */
+    MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
+} maria_declare_plugin_end;
 
 int ha_memem::create(const char *name, TABLE *table_arg,
                      HA_CREATE_INFO *create_info)
 {
   assert(memem_table_index(name) == -1);
 
-  auto t = std::make_shared<MememTable>();
+  auto t= std::make_shared<MememTable>();
   t->name= std::make_shared<std::string>(name);
-  // TODO: this is not thread safe.
   database->tables.push_back(t);
   DBUG_PRINT("info", ("[MEMEM] Created table '%s'.", name));
 
@@ -81,7 +129,6 @@ void ha_memem::reset_memem_table()
   assert(index >= 0);
   assert(index < (int) database->tables.size());
 
-  // TODO: not thread safe.
   memem_table= database->tables[index];
 }
 
@@ -143,55 +190,3 @@ int ha_memem::rnd_next(uchar *buf)
   current_position++;
   return 0;
 }
-
-static int memem_init(void *p)
-{
-  handlerton *memem_hton;
-
-  memem_hton= (handlerton *) p;
-  memem_hton->db_type= DB_TYPE_AUTOASSIGN;
-  memem_hton->create= memem_create_handler;
-  memem_hton->drop_table= [](handlerton *, const char *name) {
-    int index= memem_table_index(name);
-    if (index == -1)
-    {
-      return HA_ERR_NO_SUCH_TABLE;
-    }
-
-    // TODO: this is not thread safe.
-    database->tables.erase(database->tables.begin() + index);
-    DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
-
-    return 0;
-  };
-  memem_hton->flags= HTON_CAN_RECREATE;
-
-  database= new MememDatabase;
-
-  return 0;
-}
-
-static int memem_fini(void *p)
-{
-  delete database;
-  return 0;
-}
-
-struct st_mysql_storage_engine memem_storage_engine= {
-    MYSQL_HANDLERTON_INTERFACE_VERSION};
-
-maria_declare_plugin(memem){
-    MYSQL_STORAGE_ENGINE_PLUGIN,
-    &memem_storage_engine,
-    "MEMEM",
-    "MySQL AB",
-    "/dev/null storage engine (anything you write to it disappears)",
-    PLUGIN_LICENSE_GPL,
-    memem_init, /* Plugin Init */
-    memem_fini, /* Plugin Deinit */
-    0x0100 /* 1.0 */,
-    NULL,                          /* status variables                */
-    NULL,                          /* system variables                */
-    "1.0",                         /* string version */
-    MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
-} maria_declare_plugin_end;
