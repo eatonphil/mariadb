@@ -1,4 +1,4 @@
-# memem in-memory storage engine for MySQL/MariaDB
+# memem: in-memory storage engine for MySQL/MariaDB
 
 This is a minimal storage engine for my own education. It stores data
 in memory. It is completely not thread-safe, since I didn't have time
