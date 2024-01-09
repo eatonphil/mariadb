@@ -13,8 +13,9 @@
   along with this program; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
+
 #ifdef USE_PRAGMA_IMPLEMENTATION
-#pragma implementation // gcc: Class implementation
+#pragma implementation				// gcc: Class implementation
 #endif
 
 #define MYSQL_SERVER 1
@@ -22,191 +23,431 @@
 #include "sql_priv.h"
 #include "unireg.h"
 #include "ha_blackhole.h"
-#include "sql_class.h" // THD, SYSTEM_THREAD_SLAVE_SQL
+#include "sql_class.h"                          // THD, SYSTEM_THREAD_SLAVE_SQL
 
+/**
+  Checks if the param 'thd' is pointing to slave applier thread and row based
+  replication is in use.
+
+  A row event will have its thd->query() == NULL except in cases where
+  replicate_annotate_row_events is enabled. In the later case the thd->query()
+  will be pointing to the query, received through replicated annotate event
+  from master.
+
+  @param thd   pointer to a THD instance
+
+  @return TRUE if thread is slave applier and row based replication is in use
+*/
+static bool is_row_based_replication(THD *thd)
+{
+  return thd->system_thread == SYSTEM_THREAD_SLAVE_SQL &&
+    (thd->query() == NULL || thd->variables.binlog_annotate_row_events);
+}
 /* Static declarations for handlerton */
 
-static handler *blackhole_create_handler(handlerton *hton, TABLE_SHARE *table,
+static handler *blackhole_create_handler(handlerton *hton,
+                                         TABLE_SHARE *table,
                                          MEM_ROOT *mem_root)
 {
   return new (mem_root) ha_blackhole(hton, table);
 }
 
-static MememDatabase *database;
 
-// TODO: this is not thread safe.
-static int memem_table_index(const char *name)
-{
-  int i;
-  assert(database->tables.size() < INT_MAX);
-  for (i= 0; i < (int) database->tables.size(); i++)
-  {
-    if (strcmp(database->tables[i]->name, name) == 0)
-    {
-      return i;
-    }
-  }
+/* Static declarations for shared structures */
 
-  return -1;
-}
+static mysql_mutex_t blackhole_mutex;
+static HASH blackhole_open_tables;
+
+static st_blackhole_share *get_share(const char *table_name);
+static void free_share(st_blackhole_share *share);
 
 /*****************************************************************************
 ** BLACKHOLE tables
 *****************************************************************************/
 
+ha_blackhole::ha_blackhole(handlerton *hton,
+                           TABLE_SHARE *table_arg)
+  :handler(hton, table_arg)
+{}
+
+
+int ha_blackhole::open(const char *name, int mode, uint test_if_locked)
+{
+  DBUG_ENTER("ha_blackhole::open");
+
+  if (!(share= get_share(name)))
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+  thr_lock_data_init(&share->lock, &lock, NULL);
+  DBUG_RETURN(0);
+}
+
+int ha_blackhole::close(void)
+{
+  DBUG_ENTER("ha_blackhole::close");
+  free_share(share);
+  DBUG_RETURN(0);
+}
+
 int ha_blackhole::create(const char *name, TABLE *table_arg,
                          HA_CREATE_INFO *create_info)
 {
-  if (memem_table_index(name) != -1)
-  {
-    // For some reason even with `DROP TABLE IF EXISTS x`,
-    // delete_table() is not called. So we get into this position
-    // where sometimes the storage engine tries to create a table that
-    // already exists.
-    delete_table(name);
-  }
-
-  // TODO: this is not thread safe.
-  MememTable *t= new MememTable;
-  t->name= strdup(name);
-  database->tables.push_back(t);
-  DBUG_PRINT("info", ("[MEMEM] Created table '%s'.", name));
-
-  return 0;
+  DBUG_ENTER("ha_blackhole::create");
+  DBUG_RETURN(0);
 }
 
-int ha_blackhole::delete_table(const char *name)
+/*
+  Intended to support partitioning.
+  Allows a particular partition to be truncated.
+*/
+int ha_blackhole::truncate()
 {
-  int index= memem_table_index(name);
-  if (index == -1)
-  {
-    DBUG_PRINT("info", ("[MEMEM] Table '%s' already deleted.", name));
-    // Already deleted.
-    return 0;
-  }
-
-  // TODO: this is not thread safe.
-  MememTable *t= database->tables[index];
-
-  database->tables.erase(database->tables.begin() + index);
-
-  delete t;
-  DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
-
-  return 0;
-};
-
-void ha_blackhole::reset_memem_table()
-{
-  // Reset table cursor.
-  current_position= 0;
-
-  std::string full_name= "./" + std::string(table->s->db.str) + "/" +
-                         std::string(table->s->table_name.str);
-  DBUG_PRINT("info", ("[MEMEM] Resetting to '%s'.", full_name.c_str()));
-  int index= memem_table_index(full_name.c_str());
-  assert(index >= 0);
-  assert(index < (int) database->tables.size());
-
-  // TODO: not thread safe.
-  memem_table= database->tables[index];
+  DBUG_ENTER("ha_blackhole::truncate");
+  DBUG_RETURN(0);
 }
 
-int ha_blackhole::write_row(const uchar *buf)
+const char *ha_blackhole::index_type(uint key_number)
 {
-  if (memem_table == NULL)
-  {
-    reset_memem_table();
-  }
+  DBUG_ENTER("ha_blackhole::index_type");
+  DBUG_RETURN((table_share->key_info[key_number].flags & HA_FULLTEXT) ? 
+              "FULLTEXT" :
+              (table_share->key_info[key_number].flags & HA_SPATIAL) ?
+              "SPATIAL" :
+              (table_share->key_info[key_number].algorithm ==
+               HA_KEY_ALG_RTREE) ? "RTREE" : "BTREE");
+}
 
-  // Assume there are no NULLs.
-  buf++;
+int ha_blackhole::write_row(const uchar * buf)
+{
+  DBUG_ENTER("ha_blackhole::write_row");
+  DBUG_RETURN(table->next_number_field ? update_auto_increment() : 0);
+}
 
-  std::vector<uchar> *row= new std::vector<uchar>;
-  uint i= 0;
-  while (table->field[i])
-  {
-    if (table->field[i]->type() != MYSQL_TYPE_LONG)
-    {
-      DBUG_PRINT("info", ("Unsupported field type."));
-      return 1;
-    }
+int ha_blackhole::update_row(const uchar *old_data, const uchar *new_data)
+{
+  DBUG_ENTER("ha_blackhole::update_row");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    DBUG_RETURN(0);
+  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+}
 
-    row->insert(std::end(*row), buf, buf + sizeof(int));
-    buf+= sizeof(int);
-    i++;
-  }
-
-  memem_table->rows.push_back(row);
-
-  return 0;
+int ha_blackhole::delete_row(const uchar *buf)
+{
+  DBUG_ENTER("ha_blackhole::delete_row");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    DBUG_RETURN(0);
+  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
 int ha_blackhole::rnd_init(bool scan)
 {
-  reset_memem_table();
-  return 0;
+  DBUG_ENTER("ha_blackhole::rnd_init");
+  DBUG_RETURN(0);
 }
+
 
 int ha_blackhole::rnd_next(uchar *buf)
 {
-  if (current_position == memem_table->rows.size())
-  {
-    // Reset the in-memory table to make logic errors more obvious.
-    memem_table= NULL;
-    return HA_ERR_END_OF_FILE;
-  }
-  assert(current_position < memem_table->rows.size());
-
-  uchar *ptr= buf;
-  *ptr= 0;
-  ptr++;
-
-  // Rows internally are stored in the same format that MariaDB
-  // wants. So we can just copy them over.
-  std::vector<uchar> *row= memem_table->rows[current_position];
-  std::copy(row->begin(), row->end(), ptr);
-
-  current_position++;
-  return 0;
+  int rc;
+  DBUG_ENTER("ha_blackhole::rnd_next");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    rc= 0;
+  else
+    rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
 }
+
+
+int ha_blackhole::rnd_pos(uchar * buf, uchar *pos)
+{
+  DBUG_ENTER("ha_blackhole::rnd_pos");
+  DBUG_ASSERT(0);
+  DBUG_RETURN(0);
+}
+
+
+void ha_blackhole::position(const uchar *record)
+{
+  DBUG_ENTER("ha_blackhole::position");
+  DBUG_ASSERT(0);
+  DBUG_VOID_RETURN;
+}
+
+
+int ha_blackhole::info(uint flag)
+{
+  DBUG_ENTER("ha_blackhole::info");
+
+  bzero((char*) &stats, sizeof(stats));
+  /*
+    The following is required to get replication to work as otherwise
+    test_quick_select() will think the table is empty and thus any
+    update/delete will not have any rows to update.
+  */
+  stats.records= 2;
+  /*
+    Block size should not be 0 as this will cause division by zero
+    in scan_time()
+  */
+  stats.block_size= 8192;
+  if (flag & HA_STATUS_AUTO)
+    stats.auto_increment_value= 1;
+  DBUG_RETURN(0);
+}
+
+int ha_blackhole::external_lock(THD *thd, int lock_type)
+{
+  DBUG_ENTER("ha_blackhole::external_lock");
+  DBUG_RETURN(0);
+}
+
+
+THR_LOCK_DATA **ha_blackhole::store_lock(THD *thd,
+                                         THR_LOCK_DATA **to,
+                                         enum thr_lock_type lock_type)
+{
+  DBUG_ENTER("ha_blackhole::store_lock");
+  if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK)
+  {
+    /*
+      Here is where we get into the guts of a row level lock.
+      If TL_UNLOCK is set
+      If we are not doing a LOCK TABLE or DISCARD/IMPORT
+      TABLESPACE, then allow multiple writers
+    */
+
+    if ((lock_type >= TL_WRITE_CONCURRENT_INSERT &&
+         lock_type <= TL_WRITE) && !thd_in_lock_tables(thd)
+        && !thd_tablespace_op(thd))
+      lock_type = TL_WRITE_ALLOW_WRITE;
+
+    /*
+      In queries of type INSERT INTO t1 SELECT ... FROM t2 ...
+      MySQL would use the lock TL_READ_NO_INSERT on t2, and that
+      would conflict with TL_WRITE_ALLOW_WRITE, blocking all inserts
+      to t2. Convert the lock to a normal read lock to allow
+      concurrent inserts to t2.
+    */
+
+    if (lock_type == TL_READ_NO_INSERT && !thd_in_lock_tables(thd))
+      lock_type = TL_READ;
+
+    lock.type= lock_type;
+  }
+  *to++= &lock;
+  DBUG_RETURN(to);
+}
+
+
+int ha_blackhole::index_read_map(uchar * buf, const uchar * key,
+                                 key_part_map keypart_map,
+                             enum ha_rkey_function find_flag)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_read");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    rc= 0;
+  else
+    rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_read_idx_map(uchar * buf, uint idx, const uchar * key,
+                                 key_part_map keypart_map,
+                                 enum ha_rkey_function find_flag)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_read_idx");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    rc= 0;
+  else
+    rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_read_last_map(uchar * buf, const uchar * key,
+                                      key_part_map keypart_map)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_read_last");
+  THD *thd= ha_thd();
+  if (is_row_based_replication(thd))
+    rc= 0;
+  else
+    rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_next(uchar * buf)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_next");
+  rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_prev(uchar * buf)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_prev");
+  rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_first(uchar * buf)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_first");
+  rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+int ha_blackhole::index_last(uchar * buf)
+{
+  int rc;
+  DBUG_ENTER("ha_blackhole::index_last");
+  rc= HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
+}
+
+
+static st_blackhole_share *get_share(const char *table_name)
+{
+  st_blackhole_share *share;
+  uint length;
+
+  length= (uint) strlen(table_name);
+  mysql_mutex_lock(&blackhole_mutex);
+    
+  if (!(share= (st_blackhole_share*)
+        my_hash_search(&blackhole_open_tables,
+                       (uchar*) table_name, length)))
+  {
+    if (!(share= (st_blackhole_share*) my_malloc(PSI_INSTRUMENT_ME,
+              sizeof(st_blackhole_share) + length, MYF(MY_WME | MY_ZEROFILL))))
+      goto error;
+
+    share->table_name_length= length;
+    strmov(share->table_name, table_name);
+    
+    if (my_hash_insert(&blackhole_open_tables, (uchar*) share))
+    {
+      my_free(share);
+      share= NULL;
+      goto error;
+    }
+    
+    thr_lock_init(&share->lock);
+  }
+  share->use_count++;
+  
+error:
+  mysql_mutex_unlock(&blackhole_mutex);
+  return share;
+}
+
+static void free_share(st_blackhole_share *share)
+{
+  mysql_mutex_lock(&blackhole_mutex);
+  if (!--share->use_count)
+    my_hash_delete(&blackhole_open_tables, (uchar*) share);
+  mysql_mutex_unlock(&blackhole_mutex);
+}
+
+static void blackhole_free_key(st_blackhole_share *share)
+{
+  thr_lock_delete(&share->lock);
+  my_free(share);
+}
+
+static uchar* blackhole_get_key(st_blackhole_share *share, size_t *length,
+                                my_bool not_used __attribute__((unused)))
+{
+  *length= share->table_name_length;
+  return (uchar*) share->table_name;
+}
+
+#ifdef HAVE_PSI_INTERFACE
+static PSI_mutex_key bh_key_mutex_blackhole;
+
+static PSI_mutex_info all_blackhole_mutexes[]=
+{
+  { &bh_key_mutex_blackhole, "blackhole", PSI_FLAG_GLOBAL}
+};
+
+void init_blackhole_psi_keys()
+{
+  const char* category= "blackhole";
+  int count;
+
+  if (PSI_server == NULL)
+    return;
+
+  count= array_elements(all_blackhole_mutexes);
+  PSI_server->register_mutex(category, all_blackhole_mutexes, count);
+}
+#endif
 
 static int blackhole_init(void *p)
 {
   handlerton *blackhole_hton;
 
-  blackhole_hton= (handlerton *) p;
+#ifdef HAVE_PSI_INTERFACE
+  init_blackhole_psi_keys();
+#endif
+
+  blackhole_hton= (handlerton *)p;
   blackhole_hton->db_type= DB_TYPE_BLACKHOLE_DB;
   blackhole_hton->create= blackhole_create_handler;
-  blackhole_hton->drop_table= [](handlerton *, const char *) { return -1; };
+  blackhole_hton->drop_table= [](handlerton *, const char*) { return -1; };
   blackhole_hton->flags= HTON_CAN_RECREATE;
 
-  database= new MememDatabase;
+  mysql_mutex_init(bh_key_mutex_blackhole,
+                   &blackhole_mutex, MY_MUTEX_INIT_FAST);
+  (void) my_hash_init(PSI_INSTRUMENT_ME, &blackhole_open_tables,
+                      system_charset_info, 32, 0, 0,
+                      (my_hash_get_key) blackhole_get_key,
+                      (my_hash_free_key) blackhole_free_key, 0);
 
   return 0;
 }
 
 static int blackhole_fini(void *p)
 {
-  delete database;
+  my_hash_free(&blackhole_open_tables);
+  mysql_mutex_destroy(&blackhole_mutex);
+
   return 0;
 }
 
-struct st_mysql_storage_engine blackhole_storage_engine= {
-    MYSQL_HANDLERTON_INTERFACE_VERSION};
+struct st_mysql_storage_engine blackhole_storage_engine=
+{ MYSQL_HANDLERTON_INTERFACE_VERSION };
 
-maria_declare_plugin(blackhole){
-    MYSQL_STORAGE_ENGINE_PLUGIN,
-    &blackhole_storage_engine,
-    "BLACKHOLE",
-    "MySQL AB",
-    "/dev/null storage engine (anything you write to it disappears)",
-    PLUGIN_LICENSE_GPL,
-    blackhole_init, /* Plugin Init */
-    blackhole_fini, /* Plugin Deinit */
-    0x0100 /* 1.0 */,
-    NULL,                          /* status variables                */
-    NULL,                          /* system variables                */
-    "1.0",                         /* string version */
-    MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
-} maria_declare_plugin_end;
+maria_declare_plugin(blackhole)
+{
+  MYSQL_STORAGE_ENGINE_PLUGIN,
+  &blackhole_storage_engine,
+  "BLACKHOLE",
+  "MySQL AB",
+  "/dev/null storage engine (anything you write to it disappears)",
+  PLUGIN_LICENSE_GPL,
+  blackhole_init, /* Plugin Init */
+  blackhole_fini, /* Plugin Deinit */
+  0x0100 /* 1.0 */,
+  NULL,                       /* status variables                */
+  NULL,                       /* system variables                */
+  "1.0",                      /* string version */
+  MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
+}
+maria_declare_plugin_end;
