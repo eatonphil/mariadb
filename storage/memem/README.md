@@ -7,8 +7,8 @@ week](https://eatonphil.com/2024-01-wehack-mysql.html) when I built
 this.
 
 It's pretty succinct! 235LoC. Check out
-[storage/memem/ha_memem.cc](storage/memem/ha_memem.cc) and
-[storage/memem/ha_memem.h](storage/memem/ha_memem.h).
+[ha_memem.cc](ha_memem.cc) and
+[ha_memem.h](ha_memem.h).
 
 ## Setup
 
