@@ -36,10 +36,7 @@ socket=$(pwd)/mariadb.sock
 
 basedir=$(pwd)
 datadir=$(pwd)/db
-pid-file=$(pwd)/db.pid
-
-[mysqld]
-user=phil" > my.cnf
+pid-file=$(pwd)/db.pid" > my.cnf
 ```
 
 ## Run
@@ -63,7 +60,7 @@ $ ./build/sql/mariadbd --defaults-extra-file=$(pwd)/my.cnf --debug:d:o,$(pwd)/db
 2024-01-03 17:10:15 0 [Note] InnoDB: Setting file './ibtmp1' size to 12.000MiB. Physically writing the file full; Please wait ...
 2024-01-03 17:10:15 0 [Note] InnoDB: File './ibtmp1' size is now 12.000MiB.
 2024-01-03 17:10:15 0 [Note] InnoDB: log sequence number 57155; transaction id 16
-2024-01-03 17:10:15 0 [Note] InnoDB: Loading buffer pool(s) from /home/phil/vendor/mariadb/db/ib_buffer_pool
+2024-01-03 17:10:15 0 [Note] InnoDB: Loading buffer pool(s) from ./db/ib_buffer_pool
 2024-01-03 17:10:15 0 [Note] Plugin 'FEEDBACK' is disabled.
 2024-01-03 17:10:15 0 [Note] Plugin 'wsrep-provider' is disabled.
 2024-01-03 17:10:15 0 [Note] InnoDB: Buffer pool(s) load completed at 240103 17:10:15
@@ -71,7 +68,7 @@ $ ./build/sql/mariadbd --defaults-extra-file=$(pwd)/my.cnf --debug:d:o,$(pwd)/db
 2024-01-03 17:10:15 0 [Note] Server socket created on IP: '::'.
 2024-01-03 17:10:15 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
 2024-01-03 17:10:15 0 [Note] ./build/sql/mariadbd: ready for connections.
-Version: '11.4.0-MariaDB-debug'  socket: '/home/phil/vendor/mariadb/mariadb.sock'  port: 3306  Source distribution
+Version: '11.4.0-MariaDB-debug'  socket: './mariadb.sock'  port: 3306  Source distribution
 ```
 
 (Note: `tail -f db.debug` to see more detailed debug logs!)
@@ -80,7 +77,7 @@ In another terminal, run the provided test script
 (`storage/memem/test.sql`):
 
 ```console
-$ ./build/client/mariadb --defaults-extra-file=/home/phil/vendor/mariadb/my.cnf --database=test --table --verbose < storage/memem/test.sql
+$ ./build/client/mariadb --defaults-extra-file=$(pwd)/my.cnf --database=test --table --verbose < storage/memem/test.sql
 --------------
 drop table if exists y
 --------------
