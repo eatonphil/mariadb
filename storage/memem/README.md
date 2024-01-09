@@ -6,7 +6,7 @@ to figure out MySQL/MariaDB's lock primitives during the [hack
 week](https://eatonphil.com/2024-01-wehack-mysql.html) when I built
 this.
 
-It's pretty succinct! 245LoC. Check out
+It's pretty succinct! 235LoC. Check out
 [storage/memem/ha_memem.cc](storage/memem/ha_memem.cc) and
 [storage/memem/ha_memem.h](storage/memem/ha_memem.h).
 

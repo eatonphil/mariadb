@@ -60,8 +60,7 @@ class ha_memem final : public handler
   MememTable *memem_table= 0;
 
 public:
-  ha_memem(handlerton *hton, TABLE_SHARE *table_arg)
-      : handler(hton, table_arg)
+  ha_memem(handlerton *hton, TABLE_SHARE *table_arg) : handler(hton, table_arg)
   {
   }
   ~ha_memem()= default;
@@ -74,10 +73,7 @@ public:
 #define MEMEM_MAX_KEY_LENGTH 3500 /* Like in InnoDB */
   uint max_supported_keys() const { return MEMEM_MAX_KEY; }
   uint max_supported_key_length() const { return MEMEM_MAX_KEY_LENGTH; }
-  uint max_supported_key_part_length() const
-  {
-    return MEMEM_MAX_KEY_LENGTH;
-  }
+  uint max_supported_key_part_length() const { return MEMEM_MAX_KEY_LENGTH; }
   int open(const char *name, int mode, uint test_if_locked) { return 0; }
   int close(void) { return 0; }
   int truncate() { return 0; }
@@ -113,7 +109,7 @@ public:
   {
     return to;
   }
-  int delete_table(const char *name);
+  int delete_table(const char *name) { return 0; }
 
 private:
   void reset_memem_table();

@@ -27,7 +27,7 @@
 /* Static declarations for handlerton */
 
 static handler *memem_create_handler(handlerton *hton, TABLE_SHARE *table,
-                                         MEM_ROOT *mem_root)
+                                     MEM_ROOT *mem_root)
 {
   return new (mem_root) ha_memem(hton, table);
 }
@@ -55,16 +55,9 @@ static int memem_table_index(const char *name)
 *****************************************************************************/
 
 int ha_memem::create(const char *name, TABLE *table_arg,
-                         HA_CREATE_INFO *create_info)
+                     HA_CREATE_INFO *create_info)
 {
-  if (memem_table_index(name) != -1)
-  {
-    // For some reason even with `DROP TABLE IF EXISTS x`,
-    // delete_table() is not called. So we get into this position
-    // where sometimes the storage engine tries to create a table that
-    // already exists.
-    delete_table(name);
-  }
+  assert(memem_table_index(name) == -1);
 
   // TODO: this is not thread safe.
   MememTable *t= new MememTable;
@@ -74,27 +67,6 @@ int ha_memem::create(const char *name, TABLE *table_arg,
 
   return 0;
 }
-
-int ha_memem::delete_table(const char *name)
-{
-  int index= memem_table_index(name);
-  if (index == -1)
-  {
-    DBUG_PRINT("info", ("[MEMEM] Table '%s' already deleted.", name));
-    // Already deleted.
-    return 0;
-  }
-
-  // TODO: this is not thread safe.
-  MememTable *t= database->tables[index];
-
-  database->tables.erase(database->tables.begin() + index);
-
-  delete t;
-  DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
-
-  return 0;
-};
 
 void ha_memem::reset_memem_table()
 {
@@ -178,7 +150,23 @@ static int memem_init(void *p)
   memem_hton= (handlerton *) p;
   memem_hton->db_type= DB_TYPE_AUTOASSIGN;
   memem_hton->create= memem_create_handler;
-  memem_hton->drop_table= [](handlerton *, const char *) { return -1; };
+  memem_hton->drop_table= [](handlerton *, const char *name) {
+    int index= memem_table_index(name);
+    if (index == -1)
+    {
+      return HA_ERR_NO_SUCH_TABLE;
+    }
+
+    // TODO: this is not thread safe.
+    MememTable *t= database->tables[index];
+
+    database->tables.erase(database->tables.begin() + index);
+
+    delete t;
+    DBUG_PRINT("info", ("[MEMEM] Deleted table '%s'.", name));
+
+    return 0;
+  };
   memem_hton->flags= HTON_CAN_RECREATE;
 
   database= new MememDatabase;
