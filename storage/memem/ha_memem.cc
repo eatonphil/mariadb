@@ -108,6 +108,18 @@ int ha_memem::create(const char *name, TABLE *table_arg,
 {
   assert(memem_table_index(name) == -1);
 
+  // We only support INTEGER fields for now.
+  uint i = 0;
+  while (table_arg->field[i]) {
+    if (table_arg->field[i]->type() != MYSQL_TYPE_LONG)
+      {
+	DBUG_PRINT("info", ("Unsupported field type."));
+	return 1;
+      }
+
+    i++;
+  }
+
   auto t= std::make_shared<MememTable>();
   t->name= std::make_shared<std::string>(name);
   database->tables.push_back(t);
@@ -142,21 +154,12 @@ int ha_memem::write_row(const uchar *buf)
   // Assume there are no NULLs.
   buf++;
 
-  auto row= std::make_shared<std::vector<uchar>>();
-  uint i= 0;
-  while (table->field[i])
-  {
-    if (table->field[i]->type() != MYSQL_TYPE_LONG)
-    {
-      DBUG_PRINT("info", ("Unsupported field type."));
-      return 1;
-    }
+  uint field_count = 0;
+  while (table->field[field_count]) field_count++;
 
-    row->insert(std::end(*row), buf, buf + sizeof(int));
-    buf+= sizeof(int);
-    i++;
-  }
-
+  // Store the row in the same format MariaDB gives us.
+  auto row= std::make_shared<std::vector<uchar>>(
+      buf, buf + sizeof(int) * field_count);
   memem_table->rows.push_back(row);
 
   return 0;
